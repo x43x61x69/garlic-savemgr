@@ -2753,8 +2753,14 @@ static void handle_request_inner(int sock, char *iobuf, char *req, int n) {
         sfo_info_t sfo;
         int sfo_ret = parse_sfo(sfo_path, &sfo);
         if (sfo_ret == -2) {
-            unmount_save(); unlink(tmp);
-            http_json(sock, "{\"error\":\"param.sfo is corrupted!\"}"); return;
+            /* Zeroed SFO — keep mounted, let UI handle via doImportFinish */
+            printf("[GarlicMgr] import_encrypted: zeroed param.sfo, passing to UI\n");
+            char json[128];
+            snprintf(json, sizeof(json),
+                     "{\"ok\":true,\"sfo_zeroed\":true,\"title_id\":\"\",\"dir_name\":\"\","
+                     "\"main_title\":\"\",\"match\":true,\"exists\":false}");
+            http_json(sock, json);
+            return;
         }
         if (sfo_ret < 0) {
             unmount_save(); unlink(tmp);
@@ -4432,17 +4438,40 @@ static void handle_request_inner(int sock, char *iobuf, char *req, int n) {
             http_json(sock, "{\"error\":\"Cannot parse param.sfo — is sce_sys/param.sfo present?\"}");
             return;
         }
-        /* Force mode with bad SFO: use mounted save entry as fallback */
-        if (sfo_ret < 0 && force && g_mounted_idx >= 0) {
-            save_entry_t *ms = &g_saves[g_mounted_idx];
-            strncpy(sfo.title_id, ms->title_id, sizeof(sfo.title_id) - 1);
-            strncpy(sfo.dir_name, ms->save_name, sizeof(sfo.dir_name) - 1);
-            /* Strip sdimg_ prefix if present */
-            if (strncmp(sfo.dir_name, "sdimg_", 6) == 0)
-                memmove(sfo.dir_name, sfo.dir_name + 6, strlen(sfo.dir_name) - 5);
-            strncpy(sfo.main_title, ms->title_id, sizeof(sfo.main_title) - 1);
-            sfo.blocks = 96;
-            strcpy(sfo.format, ms->is_ps4 ? "obs" : "ppr");
+        /* Force mode with bad SFO: use mounted save entry or query params as fallback */
+        if (sfo_ret < 0 && force) {
+            if (g_mounted_idx >= 0) {
+                save_entry_t *ms = &g_saves[g_mounted_idx];
+                strncpy(sfo.title_id, ms->title_id, sizeof(sfo.title_id) - 1);
+                strncpy(sfo.dir_name, ms->save_name, sizeof(sfo.dir_name) - 1);
+                if (strncmp(sfo.dir_name, "sdimg_", 6) == 0)
+                    memmove(sfo.dir_name, sfo.dir_name + 6, strlen(sfo.dir_name) - 5);
+                strncpy(sfo.main_title, ms->title_id, sizeof(sfo.main_title) - 1);
+                sfo.blocks = 96;
+                strcpy(sfo.format, ms->is_ps4 ? "obs" : "ppr");
+            } else {
+                /* Try query params: title_id and dir_name */
+                char *tp = strstr(url, "title_id=");
+                char *dp = strstr(url, "dir_name=");
+                if (tp) {
+                    tp += 9;
+                    int ti = 0;
+                    while (tp[ti] && tp[ti] != '&' && ti < (int)sizeof(sfo.title_id) - 1)
+                        { sfo.title_id[ti] = tp[ti]; ti++; }
+                    sfo.title_id[ti] = 0;
+                }
+                if (dp) {
+                    dp += 9;
+                    int di = 0;
+                    while (dp[di] && dp[di] != '&' && di < (int)sizeof(sfo.dir_name) - 1)
+                        { sfo.dir_name[di] = dp[di]; di++; }
+                    sfo.dir_name[di] = 0;
+                }
+                if (sfo.title_id[0])
+                    strncpy(sfo.main_title, sfo.title_id, sizeof(sfo.main_title) - 1);
+                sfo.blocks = 96;
+                strcpy(sfo.format, "ppr");
+            }
         }
         if (!sfo.title_id[0] || !sfo.dir_name[0]) {
             http_json(sock, "{\"error\":\"param.sfo missing TITLE_ID or SAVEDATA_DIRECTORY\"}");

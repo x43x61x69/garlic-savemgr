@@ -1339,6 +1339,13 @@ async function importEncrypted(files) {
     const d = JSON.parse(xhr.responseText);
     if (d.error) throw new Error(d.error);
 
+    if (d.sfo_zeroed) {
+      log('Encrypted save has zeroed param.sfo', 'err');
+      await doImportFinish();
+      bsy = false;
+      return;
+    }
+
     log('Save verified: ' + d.title_id + ' / ' + d.dir_name, 'ok');
 
     /* Check if save already exists */
@@ -1405,6 +1412,8 @@ async function doImportFinish() {
     const choice = await new Promise(resolve => {
       const m = document.createElement('div');
       m.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:999';
+      let fields = '<input id="sfTid" placeholder="Title ID (e.g. PPSA07836)" style="width:100%;margin-bottom:8px;padding:8px;border:1px solid var(--bd);border-radius:6px;background:var(--s2);color:var(--tx);font-size:13px;box-sizing:border-box">'
+        + '<input id="sfDir" placeholder="Dir Name (e.g. PLAYSAVEDATA01)" style="width:100%;margin-bottom:12px;padding:8px;border:1px solid var(--bd);border-radius:6px;background:var(--s2);color:var(--tx);font-size:13px;box-sizing:border-box">';
       let btns = '<button class="btn grn" style="width:100%;margin-bottom:8px" id="sfAnyway">Import Anyway</button>';
       if (d.db_found) {
         btns += '<button class="btn" style="width:100%;margin-bottom:8px;background:var(--bd);color:var(--tx)" id="sfRegen">Regenerate from DB <span style="font-size:9px;opacity:.7;font-style:italic">(experimental)</span></button>';
@@ -1413,10 +1422,15 @@ async function doImportFinish() {
       m.innerHTML =
         '<div style="background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:24px;max-width:400px;text-align:center">'
         + '<div style="font-size:14px;color:var(--tx);margin-bottom:16px">This save has a zeroed param.sfo file.</div>'
-        + btns + '</div>';
+        + fields + btns + '</div>';
       document.body.appendChild(m);
       if (d.db_found) m.querySelector('#sfRegen').onclick = () => { m.remove(); resolve('regen'); };
-      m.querySelector('#sfAnyway').onclick = () => { m.remove(); resolve('anyway'); };
+      m.querySelector('#sfAnyway').onclick = () => {
+        const tid = m.querySelector('#sfTid').value.trim();
+        const dir = m.querySelector('#sfDir').value.trim();
+        if (!tid || !dir) { m.querySelector('#sfTid').style.borderColor = tid ? 'var(--bd)' : '#f44'; m.querySelector('#sfDir').style.borderColor = dir ? 'var(--bd)' : '#f44'; return; }
+        m.remove(); resolve({type:'anyway', tid, dir});
+      };
       m.querySelector('#sfCancel').onclick = () => { m.remove(); resolve('cancel'); };
     });
     if (choice === 'regen') {
@@ -1428,9 +1442,11 @@ async function doImportFinish() {
       r = await fetch('/api/import_finish?uid=' + encodeURIComponent(curUid));
       d = await r.json();
       if (d.error) throw new Error(d.error);
-    } else if (choice === 'anyway') {
+    } else if (choice && choice.type === 'anyway') {
       log('Importing with zeroed param.sfo...');
-      r = await fetch('/api/import_finish?uid=' + encodeURIComponent(curUid) + '&force=1');
+      r = await fetch('/api/import_finish?uid=' + encodeURIComponent(curUid)
+        + '&force=1&title_id=' + encodeURIComponent(choice.tid)
+        + '&dir_name=' + encodeURIComponent(choice.dir));
       d = await r.json();
       if (d.error) throw new Error(d.error);
     } else {
